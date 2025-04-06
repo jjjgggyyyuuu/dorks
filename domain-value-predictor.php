@@ -13,7 +13,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('DVP_PLUGIN_DIR', plugin_dir_path(__FILE__));
+define('DVP_PLUGIN_DIR', trailingslashit(plugin_dir_path(__FILE__)));
 define('DVP_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('DVP_VERSION', '1.0.0');
 
@@ -69,14 +69,32 @@ function dvp_load_core_files() {
     }
     
     // Core plugin files are included here but NOT initialized
-    require_once DVP_PLUGIN_DIR . 'includes/class-domain-predictor.php';
-    require_once DVP_PLUGIN_DIR . 'includes/class-stripe-integration.php';
-    require_once DVP_PLUGIN_DIR . 'includes/class-api-handler.php';
-    require_once DVP_PLUGIN_DIR . 'includes/class-domain-checker.php';
+    $plugin_dir = plugin_dir_path(__FILE__);
+    
+    // Check if files exist before requiring them
+    $files_to_include = array(
+        $plugin_dir . 'includes/class-domain-predictor.php',
+        $plugin_dir . 'includes/class-stripe-integration.php',
+        $plugin_dir . 'includes/class-api-handler.php',
+        $plugin_dir . 'includes/class-domain-checker.php'
+    );
+    
+    foreach ($files_to_include as $file) {
+        if (file_exists($file)) {
+            require_once $file;
+        } else {
+            error_log('Domain Value Predictor: Required file not found - ' . $file);
+        }
+    }
     
     // Load admin files in admin context
     if (is_admin()) {
-        require_once DVP_PLUGIN_DIR . 'admin/class-admin-settings.php';
+        $admin_file = $plugin_dir . 'admin/class-admin-settings.php';
+        if (file_exists($admin_file)) {
+            require_once $admin_file;
+        } else {
+            error_log('Domain Value Predictor: Admin file not found - ' . $admin_file);
+        }
     }
 }
 
