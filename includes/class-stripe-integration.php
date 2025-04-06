@@ -53,6 +53,14 @@ class DVP_Stripe_Integration {
         $this->secret_key = get_option('dvp_stripe_secret_key');
         $this->publishable_key = get_option('dvp_stripe_publishable_key');
         
+        // Try to load the Stripe library early to catch any issues
+        try {
+            $this->include_stripe_php();
+        } catch (Exception $e) {
+            // Log the error but don't stop plugin initialization
+            error_log('Domain Value Predictor - Stripe library error: ' . $e->getMessage());
+        }
+        
         // Register AJAX handlers
         add_action('wp_ajax_dvp_create_subscription', array($this, 'create_subscription'));
         add_action('wp_ajax_nopriv_dvp_create_subscription', array($this, 'unauthorized_access'));
@@ -85,16 +93,9 @@ class DVP_Stripe_Integration {
      * Create a new subscription
      */
     public function create_subscription() {
-        // Verify nonce
-        if (!isset($_POST['nonce']) || !wp_verify_nonce($_POST['nonce'], 'dvp-nonce')) {
-            wp_send_json_error(array('message' => 'Security check failed.'));
-        }
-        
-        // Check if Stripe keys are set
-        if (empty($this->secret_key) || empty($this->publishable_key)) {
-            wp_send_json_error(array(
-                'message' => 'Stripe API keys are not configured. Please contact the administrator.'
-            ));
+        // Verify nonce and permissions
+        if (!$this->validate_subscription_request()) {
+            return;
         }
         
         // Get and validate parameters
@@ -105,6 +106,7 @@ class DVP_Stripe_Integration {
             wp_send_json_error(array(
                 'message' => 'Payment method and price are required.'
             ));
+            return;
         }
         
         // Get user details
@@ -115,61 +117,18 @@ class DVP_Stripe_Integration {
             wp_send_json_error(array(
                 'message' => 'Invalid user account.'
             ));
+            return;
         }
         
         try {
-            // Include Stripe PHP library (using WP's HTTP API as a fallback for simplicity)
-            if (!class_exists('\Stripe\Stripe')) {
-                $this->include_stripe_php();
-            }
-            
-            // Set Stripe API key
-            \Stripe\Stripe::setApiKey($this->secret_key);
-            
             // Get or create customer
-            $stripe_customer_id = get_user_meta($user_id, 'dvp_stripe_customer_id', true);
-            
-            if (empty($stripe_customer_id)) {
-                // Create new customer
-                $customer = \Stripe\Customer::create([
-                    'email' => $user->user_email,
-                    'name' => $user->display_name,
-                    'payment_method' => $payment_method_id,
-                    'invoice_settings' => [
-                        'default_payment_method' => $payment_method_id,
-                    ],
-                ]);
-                
-                $stripe_customer_id = $customer->id;
-                update_user_meta($user_id, 'dvp_stripe_customer_id', $stripe_customer_id);
-            } else {
-                // Update payment method for existing customer
-                \Stripe\PaymentMethod::attach([
-                    'customer' => $stripe_customer_id,
-                    'payment_method' => $payment_method_id,
-                ]);
-                
-                \Stripe\Customer::update($stripe_customer_id, [
-                    'invoice_settings' => [
-                        'default_payment_method' => $payment_method_id,
-                    ],
-                ]);
+            $stripe_customer_id = $this->get_or_create_customer($user, $payment_method_id);
+            if (!$stripe_customer_id) {
+                throw new Exception('Failed to create or retrieve Stripe customer');
             }
             
             // Create subscription
-            $subscription = \Stripe\Subscription::create([
-                'customer' => $stripe_customer_id,
-                'items' => [
-                    ['price' => $price_id],
-                ],
-                'expand' => ['latest_invoice.payment_intent'],
-            ]);
-            
-            // Update user metadata with subscription info
-            update_user_meta($user_id, 'dvp_stripe_subscription_id', $subscription->id);
-            update_user_meta($user_id, 'dvp_subscription_status', $subscription->status);
-            update_user_meta($user_id, 'dvp_subscription_price_id', $price_id);
-            update_user_meta($user_id, 'dvp_subscription_created', current_time('mysql'));
+            $subscription = $this->create_stripe_subscription($stripe_customer_id, $price_id, $user_id);
             
             // Return the subscription and client secret for confirmation
             wp_send_json_success(array(
@@ -186,6 +145,114 @@ class DVP_Stripe_Integration {
                 'message' => 'Error creating subscription: ' . $e->getMessage()
             ));
         }
+    }
+    
+    /**
+     * Validate the subscription request
+     * 
+     * @return bool True if validation passes, false otherwise
+     */
+    private function validate_subscription_request() {
+        // Verify nonce
+        if (!isset($_POST['nonce']) || !wp_verify_nonce($_POST['nonce'], 'dvp-nonce')) {
+            wp_send_json_error(array('message' => 'Security check failed.'));
+            return false;
+        }
+        
+        // Make sure Stripe PHP library is loaded BEFORE any operation
+        try {
+            if (!class_exists('\Stripe\Stripe')) {
+                $this->include_stripe_php();
+                
+                if (!class_exists('\Stripe\Stripe') || !class_exists('\Stripe\Customer') || !class_exists('\Stripe\Subscription')) {
+                    throw new Exception('Stripe PHP library could not be loaded properly.');
+                }
+            }
+            
+            // Set the API key after confirming library is loaded
+            \Stripe\Stripe::setApiKey($this->secret_key);
+        } catch (Exception $e) {
+            wp_send_json_error(array('message' => 'Stripe configuration error: ' . $e->getMessage()));
+            return false;
+        }
+        
+        // Check if Stripe keys are set
+        if (empty($this->secret_key) || empty($this->publishable_key)) {
+            wp_send_json_error(array(
+                'message' => 'Stripe API keys are not configured. Please contact the administrator.'
+            ));
+            return false;
+        }
+        
+        return true;
+    }
+    
+    /**
+     * Get or create a Stripe customer
+     * 
+     * @param WP_User $user WordPress user object
+     * @param string $payment_method_id Stripe payment method ID
+     * @return string|false Customer ID or false on failure
+     */
+    private function get_or_create_customer($user, $payment_method_id) {
+        $user_id = $user->ID;
+        $stripe_customer_id = get_user_meta($user_id, 'dvp_stripe_customer_id', true);
+        
+        if (empty($stripe_customer_id)) {
+            // Create new customer
+            $customer = \Stripe\Customer::create([
+                'email' => $user->user_email,
+                'name' => $user->display_name,
+                'payment_method' => $payment_method_id,
+                'invoice_settings' => [
+                    'default_payment_method' => $payment_method_id,
+                ],
+            ]);
+            
+            $stripe_customer_id = $customer->id;
+            update_user_meta($user_id, 'dvp_stripe_customer_id', $stripe_customer_id);
+        } else {
+            // Update payment method for existing customer
+            \Stripe\PaymentMethod::attach([
+                'customer' => $stripe_customer_id,
+                'payment_method' => $payment_method_id,
+            ]);
+            
+            \Stripe\Customer::update($stripe_customer_id, [
+                'invoice_settings' => [
+                    'default_payment_method' => $payment_method_id,
+                ],
+            ]);
+        }
+        
+        return $stripe_customer_id;
+    }
+    
+    /**
+     * Create a Stripe subscription
+     * 
+     * @param string $stripe_customer_id Stripe customer ID
+     * @param string $price_id Stripe price ID
+     * @param int $user_id WordPress user ID
+     * @return \Stripe\Subscription Subscription object
+     */
+    private function create_stripe_subscription($stripe_customer_id, $price_id, $user_id) {
+        // Create subscription
+        $subscription = \Stripe\Subscription::create([
+            'customer' => $stripe_customer_id,
+            'items' => [
+                ['price' => $price_id],
+            ],
+            'expand' => ['latest_invoice.payment_intent'],
+        ]);
+        
+        // Update user metadata with subscription info
+        update_user_meta($user_id, 'dvp_stripe_subscription_id', $subscription->id);
+        update_user_meta($user_id, 'dvp_subscription_status', $subscription->status);
+        update_user_meta($user_id, 'dvp_subscription_price_id', $price_id);
+        update_user_meta($user_id, 'dvp_subscription_created', current_time('mysql'));
+        
+        return $subscription;
     }
     
     /**
@@ -363,7 +430,12 @@ class DVP_Stripe_Integration {
             $message .= "Thank you,\n";
             $message .= get_bloginfo('name');
             
-            wp_mail($user->user_email, $subject, $message);
+            // Check if wp_mail function exists before calling it
+            if (function_exists('wp_mail')) {
+                wp_mail($user->user_email, $subject, $message);
+            } else {
+                error_log('Domain Value Predictor: wp_mail function not available for sending payment failure notification');
+            }
         }
     }
     
@@ -373,17 +445,47 @@ class DVP_Stripe_Integration {
     private function include_stripe_php() {
         // Check if Stripe library is already included
         if (class_exists('\Stripe\Stripe')) {
-            return;
+            return true;
         }
         
-        // Check if we have the library in the plugin directory
-        $stripe_php_path = DVP_PLUGIN_DIR . 'vendor/stripe-php/init.php';
-        
-        if (file_exists($stripe_php_path)) {
-            require_once $stripe_php_path;
-            return;
+        // First check: Try to use Composer autoloader if available (recommended method)
+        if (file_exists(DVP_PLUGIN_DIR . 'vendor/autoload.php')) {
+            require_once DVP_PLUGIN_DIR . 'vendor/autoload.php';
+            
+            if (class_exists('\Stripe\Stripe')) {
+                return true;
+            }
         }
         
+        // Second check: Look for the library in common WordPress plugin directories
+        $possible_paths = array(
+            // Our plugin directory
+            DVP_PLUGIN_DIR . 'vendor/stripe-php/init.php',
+            DVP_PLUGIN_DIR . 'vendor/stripe/stripe-php/init.php',
+            // WP content directory
+            WP_CONTENT_DIR . '/vendor/stripe/stripe-php/init.php',
+            // Other common plugin locations
+            WP_PLUGIN_DIR . '/woocommerce-gateway-stripe/includes/stripe-php/init.php',
+            WP_PLUGIN_DIR . '/stripe/includes/lib/stripe-php/init.php',
+        );
+        
+        foreach ($possible_paths as $path) {
+            if (file_exists($path)) {
+                require_once $path;
+                if (class_exists('\Stripe\Stripe')) {
+                    return true;
+                }
+            }
+        }
+        
+        // Final fallback: Try to download the library directly
+        return $this->download_stripe_library();
+    }
+    
+    /**
+     * Download and install Stripe PHP library
+     */
+    private function download_stripe_library() {
         // As a fallback, download the library
         $stripe_zip_url = 'https://github.com/stripe/stripe-php/archive/v9.10.0.zip';
         $download_path = DVP_PLUGIN_DIR . 'vendor/stripe-php.zip';

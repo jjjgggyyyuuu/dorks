@@ -249,8 +249,18 @@ class Domain_Value_Predictor {
     public function domain_predictor_shortcode($atts) {
         if (!$this->is_user_subscribed()) {
             // Get subscription page URL safely
-            $subscription_page = get_page_by_path('subscription');
-            $subscription_url = $subscription_page ? get_permalink($subscription_page) : '#';
+            // Use WP_Query instead of deprecated get_page_by_path
+            $subscription_url = '#';
+            $query = new WP_Query(array(
+                'post_type' => 'page',
+                'name' => 'subscription',
+                'posts_per_page' => 1
+            ));
+            if ($query->have_posts()) {
+                $query->the_post();
+                $subscription_url = get_permalink();
+                wp_reset_postdata();
+            }
             
             return '<div class="dvp-subscription-required">
                 <h3>Subscription Required</h3>
@@ -260,7 +270,13 @@ class Domain_Value_Predictor {
         }
         
         ob_start();
-        include DVP_PLUGIN_DIR . 'templates/domain-predictor.php';
+        $template_file = DVP_PLUGIN_DIR . 'templates/domain-predictor.php';
+        if (file_exists($template_file)) {
+            include $template_file;
+        } else {
+            echo '<div class="dvp-error">Template file not found. Please contact the administrator.</div>';
+            error_log('Domain Value Predictor: Template file not found - ' . $template_file);
+        }
         return ob_get_clean();
     }
 
@@ -270,8 +286,18 @@ class Domain_Value_Predictor {
     public function subscription_form_shortcode($atts) {
         if ($this->is_user_subscribed()) {
             // Get domain predictor page URL safely
-            $predictor_page = get_page_by_path('domain-predictor');
-            $predictor_url = $predictor_page ? get_permalink($predictor_page) : '#';
+            // Use WP_Query instead of deprecated get_page_by_path
+            $predictor_url = '#';
+            $query = new WP_Query(array(
+                'post_type' => 'page',
+                'name' => 'domain-predictor',
+                'posts_per_page' => 1
+            ));
+            if ($query->have_posts()) {
+                $query->the_post();
+                $predictor_url = get_permalink();
+                wp_reset_postdata();
+            }
             
             return '<div class="dvp-subscription-active">
                 <h3>You\'re Subscribed!</h3>
@@ -280,7 +306,13 @@ class Domain_Value_Predictor {
         }
         
         ob_start();
-        include DVP_PLUGIN_DIR . 'templates/subscription-form.php';
+        $template_file = DVP_PLUGIN_DIR . 'templates/subscription-form.php';
+        if (file_exists($template_file)) {
+            include $template_file;
+        } else {
+            echo '<div class="dvp-error">Template file not found. Please contact the administrator.</div>';
+            error_log('Domain Value Predictor: Template file not found - ' . $template_file);
+        }
         return ob_get_clean();
     }
 
