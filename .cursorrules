@@ -1,0 +1,59 @@
+# Domain Value Predictor - WordPress Plugin
+
+This WordPress plugin helps users discover potentially profitable domain names using AI-powered prediction.
+
+## Project Structure
+
+- `domain-value-predictor.php` - Main plugin file
+- `includes/` - Core functionality classes
+  - `class-domain-predictor.php` - AI domain prediction logic
+  - `class-domain-checker.php` - Domain availability checking
+  - `class-stripe-integration.php` - Subscription management
+  - `class-api-handler.php` - External API communication
+- `admin/` - WordPress admin interface
+  - `class-admin-settings.php` - Admin settings and UI
+- `templates/` - Frontend templates
+  - `domain-predictor.php` - Main domain search interface
+  - `subscription-form.php` - Subscription signup form
+- `assets/` - Frontend resources
+  - `css/domain-predictor.css` - Styles
+  - `js/domain-predictor.js` - Frontend JavaScript
+
+## Key Technologies & Integrations
+
+- WordPress Plugin API
+- OpenAI API for domain value prediction
+- Stripe API for subscription management
+- Domain availability checking via WHOIS or external API
+- AJAX for async frontend interactions
+
+## Functionality Overview
+
+1. Users can subscribe to the service via Stripe
+2. Subscribers can search for potentially valuable domains
+3. The plugin uses AI to predict domain value based on trends and data
+4. Domain availability is checked in real-time
+5. Results show registration price, potential value, and value increase
+
+## Naming Conventions
+
+- Class names: `DVP_Class_Name`
+- Function names: `dvp_function_name`
+- AJAX actions: `dvp_action_name`
+- Database tables: `{$wpdb->prefix}dvp_table_name`
+- Options: `dvp_option_name`
+- Meta keys: `dvp_meta_key`
+
+## Code Style
+
+- Follow WordPress coding standards
+- Use OOP approach with separate classes for different functionality
+- Keep frontend and backend code separate
+- Use proper sanitization and validation for security
+
+## Development Notes
+
+- For testing, you can use `dvp_openai_api_key`, `dvp_stripe_publishable_key`, and `dvp_stripe_secret_key` options
+- Ajax endpoints are registered in the class constructors
+- Database tables are created in the plugin activation method
+- The plugin uses shortcodes `[domain_predictor]` and `[subscription_form]` for frontend display 
